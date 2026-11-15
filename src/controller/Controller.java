@@ -1,5 +1,6 @@
 package controller;
 
+import graphics.filler.ScanlineFiller;
 import graphics.filler.SeedFiller;
 import graphics.rasterizer.LineRasterizer;
 import graphics.rasterizer.PolygonOutlineRasterizer;
@@ -32,6 +33,7 @@ public class Controller {
     private final LineRasterizer rasterizer;
     private final PolygonRasterizer polygonRasterizer;
     private final SeedFiller seedFiller;
+    private final ScanlineFiller scanlineFiller;
 
     private final List<Line> independentLines = new ArrayList<>();
     private final List<Line> freehandLines = new ArrayList<>();
@@ -50,6 +52,7 @@ public class Controller {
 
     private Point seedPoint = null;
     private boolean useBoundaryColor = false;
+    private boolean scanlineEnabled = false;
     private Point lastFreehandPoint = null;
     private boolean freehandDragged = false;
 
@@ -72,6 +75,7 @@ public class Controller {
         this.rasterizer = new TrivialLineRasterizer(canvas.getRaster());
         this.polygonRasterizer = new PolygonOutlineRasterizer(rasterizer);
         this.seedFiller = new SeedFiller(canvas.getRaster());
+        this.scanlineFiller = new ScanlineFiller(canvas.getRaster(), polygonRasterizer);
 
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(100, 100), new Point(300, 100)));
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(300, 100), new Point(350, 250)));
@@ -211,6 +215,7 @@ public class Controller {
                         independentLines.clear();
                         freehandLines.clear();
                         seedPoint = null;
+                        scanlineEnabled = false;
                         previewLine = null;
                         closingPreviewLine = null;
                         draggedPolygonVertexIndex = -1;
@@ -218,6 +223,15 @@ public class Controller {
                         render();
                     }
                     case KeyEvent.VK_ENTER, KeyEvent.VK_F -> finishPolygon();
+                    case KeyEvent.VK_G -> {
+                        if (!scanlineEnabled && polygon.size() >= 3) {
+                            polygon.setFinished(true);
+                            previewLine = null;
+                            closingPreviewLine = null;
+                        }
+                        scanlineEnabled = !scanlineEnabled;
+                        render();
+                    }
                     case KeyEvent.VK_P -> {
                         currentMode = Mode.POLYGON;
                         previewLine = null;
@@ -284,16 +298,21 @@ public class Controller {
     public void render() {
         canvas.clear();
 
-        // 1. Vykreslení rastrových hranic (úsečky, volná ruka, obrys polygonu)
         for (Line line : independentLines) {
             rasterizer.rasterize(line);
         }
         for (Line line : freehandLines) {
             rasterizer.rasterize(line);
         }
-        polygonRasterizer.rasterize(polygon);
 
-        // 2. Semínkové vyplnění rastrově zadané oblasti
+        if (scanlineEnabled && polygon.isFinished() && polygon.size() >= 3) {
+            scanlineFiller.setPolygon(polygon);
+            scanlineFiller.setFillColor(fillColor);
+            scanlineFiller.fill();
+        } else {
+            polygonRasterizer.rasterize(polygon);
+        }
+
         if (seedPoint != null) {
             seedFiller.setSeed(seedPoint);
             seedFiller.setFillColor(fillColor);
@@ -302,7 +321,6 @@ public class Controller {
             seedFiller.fill();
         }
 
-        // 3. Značky vrcholů (vykresleny až po SeedFillu, aby nenarušily detekci hranice)
         for (Line line : independentLines) {
             drawVertexMarker(line.getPoint1());
             drawVertexMarker(line.getPoint2());
@@ -311,7 +329,6 @@ public class Controller {
             drawVertexMarker(p);
         }
 
-        // 4. Náhledy kreslených čar
         if (previewLine != null) {
             rasterizer.rasterize(previewLine);
         }
@@ -324,12 +341,13 @@ public class Controller {
             case LINE -> "ÚSEČKY [L]";
             case SEED_FILL -> "SEED FILL [S]";
         };
-        String seedCondLabel = useBoundaryColor ? "BARVA HRANICE [B]" : "BARVA POZADÍ [B]";
+        String seedCondLabel = useBoundaryColor ? "HRANICE [B]" : "POZADÍ [B]";
+        String scanlineLabel = scanlineEnabled ? "ZAP [G]" : "VYP [G]";
 
         canvas.setStatusText(
-                "Režim: " + modeLabel + " | SeedFill podmínka: " + seedCondLabel +
-                        " | Změna barvy výplně: [V] | Smazat vše: [C]\n" +
-                        "SeedFill [S]: [Klik] Vyplnit | [Tažení] Kreslit hranici || Kreslení [P/L]: [Levé tl.] (+[Shift]) | [Pravé] Přesun | [Střední] Přidat | [1-5] Barva hranice"
+                "Režim: " + modeLabel + " | Scan-Line: " + scanlineLabel +
+                        " | Seed-Fill podmínka: " + seedCondLabel + " | Barva výplně: [V] | Smazat: [C]\n" +
+                        "Kreslení [P/L]: [Levé tl.] (+[Shift]) | [Pravé] Přesun | [Střední] Přidat vrchol | [E/R] Rotace | [1-5] Barva hranice"
         );
 
         canvas.repaint();
