@@ -1,6 +1,7 @@
 package controller;
 
 import graphics.clipper.CohenSutherlandClipper;
+import graphics.clipper.SutherlandHodgmanClipper;
 import graphics.filler.ScanlineFiller;
 import graphics.filler.SeedFiller;
 import graphics.rasterizer.LineRasterizer;
@@ -16,6 +17,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class Controller {
@@ -31,11 +33,13 @@ public class Controller {
 
     private final Canvas canvas;
     private final Polygon polygon;
+    private final Polygon clipPolygon;
     private final LineRasterizer rasterizer;
     private final PolygonRasterizer polygonRasterizer;
     private final SeedFiller seedFiller;
     private final ScanlineFiller scanlineFiller;
     private final CohenSutherlandClipper lineClipper;
+    private final SutherlandHodgmanClipper polygonClipper;
 
     private final List<Line> independentLines = new ArrayList<>();
     private final List<Line> freehandLines = new ArrayList<>();
@@ -56,6 +60,7 @@ public class Controller {
     private boolean useBoundaryColor = false;
     private boolean scanlineEnabled = false;
     private boolean lineClippingEnabled = false;
+    private boolean polygonClippingEnabled = false;
     private Point lastFreehandPoint = null;
     private boolean freehandDragged = false;
 
@@ -64,10 +69,12 @@ public class Controller {
     private static final int VERTEX_COLOR = new Color(0, 220, 255).getRGB();
     private static final int CLIP_WINDOW_COLOR = new Color(255, 215, 0).getRGB();
     private static final int CLIPPED_LINE_COLOR = new Color(0, 230, 118).getRGB();
+    private static final int CLIPPED_FILL_COLOR = new Color(0, 130, 70).getRGB();
     private static final int DIMMED_LINE_COLOR = new Color(105, 105, 105).getRGB();
     private static final double EDIT_RADIUS = 20.0;
 
     private int draggedPolygonVertexIndex = -1;
+    private int draggedClipPolyVertexIndex = -1;
     private Line draggedLine = null;
     private boolean draggingLineFirstPoint = false;
     private int draggedClipCornerIndex = -1;
@@ -81,16 +88,32 @@ public class Controller {
     public Controller(Canvas canvas) {
         this.canvas = canvas;
         this.polygon = new Polygon();
+        this.clipPolygon = new Polygon();
         this.rasterizer = new TrivialLineRasterizer(canvas.getRaster());
         this.polygonRasterizer = new PolygonOutlineRasterizer(rasterizer);
         this.seedFiller = new SeedFiller(canvas.getRaster());
         this.scanlineFiller = new ScanlineFiller(canvas.getRaster(), polygonRasterizer);
         this.lineClipper = new CohenSutherlandClipper(180, 110, 620, 460);
+        this.polygonClipper = new SutherlandHodgmanClipper();
 
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(100, 100), new Point(300, 100)));
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(300, 100), new Point(350, 250)));
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(350, 250), new Point(200, 350)));
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(200, 350), new Point(100, 250)));
+
+        resetClipPolygon();
+    }
+
+    private void resetClipPolygon() {
+        clipPolygon.clear();
+        // Konvexní ořezávací pětiúhelník (5 vrcholů)
+        clipPolygon.addPoint(new Point(350, 120));
+        clipPolygon.addPoint(new Point(540, 220));
+        clipPolygon.addPoint(new Point(480, 430));
+        clipPolygon.addPoint(new Point(220, 430));
+        clipPolygon.addPoint(new Point(160, 220));
+        clipPolygon.setColor(CLIP_WINDOW_COLOR);
+        clipPolygon.setFinished(true);
     }
 
     /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= Main functions -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- */
@@ -141,8 +164,10 @@ public class Controller {
                 lastMousePos = getPoint(e);
                 shiftPressed = e.isShiftDown();
 
-                if (draggedPolygonVertexIndex != -1 || draggedLine != null || draggedClipCornerIndex != -1) {
+                if (draggedPolygonVertexIndex != -1 || draggedClipPolyVertexIndex != -1
+                        || draggedLine != null || draggedClipCornerIndex != -1) {
                     draggedPolygonVertexIndex = -1;
+                    draggedClipPolyVertexIndex = -1;
                     draggedLine = null;
                     draggedClipCornerIndex = -1;
                     clipAnchorPoint = null;
@@ -218,6 +243,12 @@ public class Controller {
                     return;
                 }
 
+                if (draggedClipPolyVertexIndex != -1) {
+                    clipPolygon.updatePoint(draggedClipPolyVertexIndex, currentPos);
+                    render();
+                    return;
+                }
+
                 if (draggedPolygonVertexIndex != -1) {
                     polygon.updatePoint(draggedPolygonVertexIndex, currentPos);
                     render();
@@ -264,10 +295,13 @@ public class Controller {
                         seedPoint = null;
                         scanlineEnabled = false;
                         lineClippingEnabled = false;
+                        polygonClippingEnabled = false;
                         lineClipper.setBounds(180, 110, 620, 460);
+                        resetClipPolygon();
                         previewLine = null;
                         closingPreviewLine = null;
                         draggedPolygonVertexIndex = -1;
+                        draggedClipPolyVertexIndex = -1;
                         draggedLine = null;
                         draggedClipCornerIndex = -1;
                         render();
@@ -285,11 +319,23 @@ public class Controller {
                     case KeyEvent.VK_K -> {
                         lineClippingEnabled = !lineClippingEnabled;
                         if (lineClippingEnabled && independentLines.isEmpty()) {
-                            // Demo úsečky pro všechny stavy (částečný průnik, triviální přijetí, triviální zamítnutí)
                             independentLines.add(new Line(activeColor, new Point(100, 160), new Point(700, 410)));
                             independentLines.add(new Line(activeColor, new Point(240, 200), new Point(520, 360)));
                             independentLines.add(new Line(activeColor, new Point(80, 480), new Point(720, 520)));
                         }
+                        render();
+                    }
+                    case KeyEvent.VK_H -> {
+                        polygonClippingEnabled = !polygonClippingEnabled;
+                        if (polygonClippingEnabled && polygon.size() >= 3) {
+                            polygon.setFinished(true);
+                            previewLine = null;
+                            closingPreviewLine = null;
+                        }
+                        render();
+                    }
+                    case KeyEvent.VK_O -> {
+                        Collections.reverse(clipPolygon.getPoints());
                         render();
                     }
                     case KeyEvent.VK_P -> {
@@ -362,7 +408,26 @@ public class Controller {
             rasterizer.rasterize(line);
         }
 
-        if (scanlineEnabled && polygon.isFinished() && polygon.size() >= 3) {
+        if (polygonClippingEnabled) {
+            drawDimmedPolygonOutline(polygon);
+
+            if (polygon.isFinished() && polygon.size() >= 3) {
+                Polygon clippedPoly = polygonClipper.clip(polygon, clipPolygon, CLIPPED_LINE_COLOR);
+                if (clippedPoly.size() >= 3) {
+                    scanlineFiller.setPolygon(clippedPoly);
+                    scanlineFiller.setFillColor(CLIPPED_FILL_COLOR);
+                    scanlineFiller.fill();
+                    for (Point p : clippedPoly.getPoints()) {
+                        drawVertexMarker(p, CLIPPED_LINE_COLOR);
+                    }
+                }
+            }
+
+            polygonRasterizer.rasterize(clipPolygon);
+            for (Point p : clipPolygon.getPoints()) {
+                drawVertexMarker(p, CLIP_WINDOW_COLOR);
+            }
+        } else if (scanlineEnabled && polygon.isFinished() && polygon.size() >= 3) {
             scanlineFiller.setPolygon(polygon);
             scanlineFiller.setFillColor(fillColor);
             scanlineFiller.fill();
@@ -418,14 +483,30 @@ public class Controller {
         };
         String scanlineLabel = scanlineEnabled ? "ZAP [G]" : "VYP [G]";
         String clipLineLabel = lineClippingEnabled ? "ZAP [K]" : "VYP [K]";
+        String clipPolyLabel = polygonClippingEnabled ? "ZAP [H]" : "VYP [H]";
+        String orientLabel = polygonClipper.getSignedArea(clipPolygon.getPoints()) >= 0 ? "+" : "-";
 
         canvas.setStatusText(
-                "Režim: " + modeLabel + " | Scan-Line: " + scanlineLabel +
-                        " | Ořez úsečky: " + clipLineLabel + " | Seed-Fill: [B/V] | Smazat: [C]\n" +
-                        "Ořez [K]: [Pravé tl.] Posun rohu okna | [Alt+Levé] Nové okno | [L] Kreslit úsečky (+[Shift])"
+                "Režim: " + modeLabel + " | Scan-Line [G]: " + scanlineLabel +
+                        " | Ořez úsečky [K]: " + clipLineLabel + " | Ořez polygonu [H]: " + clipPolyLabel +
+                        " (orientace [" + orientLabel + "]: [O])\n" +
+                        "Ovládání: [Levé] Kreslit (+[Shift]) | [Pravé] Posun vrcholů/ořezu | [S] Seed-Fill ([B/V]) | [E/R] Rotace | [C] Smazat vše"
         );
 
         canvas.repaint();
+    }
+
+    private void drawDimmedPolygonOutline(Polygon poly) {
+        List<Point> pts = poly.getPoints();
+        if (pts.size() < 2) {
+            return;
+        }
+        for (int i = 0; i < pts.size() - 1; i++) {
+            rasterizer.rasterize(new Line(DIMMED_LINE_COLOR, pts.get(i), pts.get(i + 1)));
+        }
+        if (poly.isFinished() && pts.size() >= 3) {
+            rasterizer.rasterize(new Line(DIMMED_LINE_COLOR, pts.get(pts.size() - 1), pts.get(0)));
+        }
     }
 
     private void drawClipWindow() {
@@ -509,6 +590,7 @@ public class Controller {
     private void startVertexEdit(Point clickPoint) {
         double minDistance = EDIT_RADIUS;
         draggedPolygonVertexIndex = -1;
+        draggedClipPolyVertexIndex = -1;
         draggedLine = null;
         draggedClipCornerIndex = -1;
         clipAnchorPoint = null;
@@ -525,6 +607,19 @@ public class Controller {
             }
         }
 
+        if (polygonClippingEnabled) {
+            List<Point> clipPts = clipPolygon.getPoints();
+            for (int i = 0; i < clipPts.size(); i++) {
+                double dist = clickPoint.distanceTo(clipPts.get(i));
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    draggedClipCornerIndex = -1;
+                    clipAnchorPoint = null;
+                    draggedClipPolyVertexIndex = i;
+                }
+            }
+        }
+
         List<Point> polyPoints = polygon.getPoints();
         for (int i = 0; i < polyPoints.size(); i++) {
             double dist = clickPoint.distanceTo(polyPoints.get(i));
@@ -532,6 +627,7 @@ public class Controller {
                 minDistance = dist;
                 draggedClipCornerIndex = -1;
                 clipAnchorPoint = null;
+                draggedClipPolyVertexIndex = -1;
                 draggedPolygonVertexIndex = i;
             }
         }
@@ -542,6 +638,7 @@ public class Controller {
                 minDistance = d1;
                 draggedClipCornerIndex = -1;
                 clipAnchorPoint = null;
+                draggedClipPolyVertexIndex = -1;
                 draggedPolygonVertexIndex = -1;
                 draggedLine = line;
                 draggingLineFirstPoint = true;
@@ -551,6 +648,7 @@ public class Controller {
                 minDistance = d2;
                 draggedClipCornerIndex = -1;
                 clipAnchorPoint = null;
+                draggedClipPolyVertexIndex = -1;
                 draggedPolygonVertexIndex = -1;
                 draggedLine = line;
                 draggingLineFirstPoint = false;
