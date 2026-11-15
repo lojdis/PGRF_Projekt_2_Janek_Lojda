@@ -1,5 +1,6 @@
 package controller;
 
+import graphics.filler.SeedFiller;
 import graphics.rasterizer.LineRasterizer;
 import graphics.rasterizer.PolygonOutlineRasterizer;
 import graphics.rasterizer.PolygonRasterizer;
@@ -18,7 +19,7 @@ import java.util.List;
 public class Controller {
 
     private enum Mode {
-        POLYGON, LINE
+        POLYGON, LINE, SEED_FILL
     }
 
     private Mode currentMode = Mode.POLYGON;
@@ -30,11 +31,28 @@ public class Controller {
     private final Polygon polygon;
     private final LineRasterizer rasterizer;
     private final PolygonRasterizer polygonRasterizer;
+    private final SeedFiller seedFiller;
 
     private final List<Line> independentLines = new ArrayList<>();
+    private final List<Line> freehandLines = new ArrayList<>();
     private final List<Line> initialDemoLines = new ArrayList<>();
 
     private int activeColor = Color.WHITE.getRGB();
+    private int fillColor = new Color(255, 140, 0).getRGB();
+    private static final int[] FILL_PALETTE = {
+            new Color(255, 140, 0).getRGB(),
+            new Color(0, 200, 120).getRGB(),
+            new Color(80, 170, 255).getRGB(),
+            new Color(220, 80, 220).getRGB(),
+            new Color(255, 215, 0).getRGB()
+    };
+    private int fillPaletteIndex = 0;
+
+    private Point seedPoint = null;
+    private boolean useBoundaryColor = false;
+    private Point lastFreehandPoint = null;
+    private boolean freehandDragged = false;
+
     private static final int PREVIEW_COLOR = Color.RED.getRGB();
     private static final int CLOSING_PREVIEW_COLOR = new Color(255, 165, 0).getRGB();
     private static final int VERTEX_COLOR = new Color(0, 220, 255).getRGB();
@@ -53,6 +71,7 @@ public class Controller {
         this.polygon = new Polygon();
         this.rasterizer = new TrivialLineRasterizer(canvas.getRaster());
         this.polygonRasterizer = new PolygonOutlineRasterizer(rasterizer);
+        this.seedFiller = new SeedFiller(canvas.getRaster());
 
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(100, 100), new Point(300, 100)));
         initialDemoLines.add(new Line(Color.WHITE.getRGB(), new Point(300, 100), new Point(350, 250)));
@@ -87,6 +106,11 @@ public class Controller {
                 }
 
                 if (SwingUtilities.isLeftMouseButton(e)) {
+                    if (currentMode == Mode.SEED_FILL) {
+                        lastFreehandPoint = getPoint(e);
+                        freehandDragged = false;
+                        return;
+                    }
                     startLine(e);
                 }
             }
@@ -100,6 +124,16 @@ public class Controller {
                     draggedPolygonVertexIndex = -1;
                     draggedLine = null;
                     render();
+                    return;
+                }
+
+                if (SwingUtilities.isLeftMouseButton(e) && currentMode == Mode.SEED_FILL) {
+                    if (!freehandDragged) {
+                        seedPoint = getPoint(e);
+                        render();
+                    }
+                    lastFreehandPoint = null;
+                    freehandDragged = false;
                     return;
                 }
 
@@ -148,6 +182,14 @@ public class Controller {
                     return;
                 }
 
+                if (currentMode == Mode.SEED_FILL && lastFreehandPoint != null) {
+                    freehandDragged = true;
+                    freehandLines.add(new Line(activeColor, lastFreehandPoint, currentPos));
+                    lastFreehandPoint = currentPos;
+                    render();
+                    return;
+                }
+
                 if (previewLine != null) {
                     updatePreview(currentPos);
                 }
@@ -167,6 +209,8 @@ public class Controller {
                     case KeyEvent.VK_C -> {
                         polygon.clear();
                         independentLines.clear();
+                        freehandLines.clear();
+                        seedPoint = null;
                         previewLine = null;
                         closingPreviewLine = null;
                         draggedPolygonVertexIndex = -1;
@@ -186,34 +230,28 @@ public class Controller {
                         closingPreviewLine = null;
                         render();
                     }
+                    case KeyEvent.VK_S -> {
+                        currentMode = Mode.SEED_FILL;
+                        previewLine = null;
+                        closingPreviewLine = null;
+                        render();
+                    }
+                    case KeyEvent.VK_B -> {
+                        useBoundaryColor = !useBoundaryColor;
+                        render();
+                    }
+                    case KeyEvent.VK_V -> {
+                        cycleFillColor();
+                        render();
+                    }
                     case KeyEvent.VK_D, KeyEvent.VK_DELETE, KeyEvent.VK_BACK_SPACE -> deleteClosestVertex(lastMousePos);
                     case KeyEvent.VK_E -> rotatePolygon(-15);
                     case KeyEvent.VK_R -> rotatePolygon(15);
-                    case KeyEvent.VK_1 -> {
-                        activeColor = Color.WHITE.getRGB();
-                        polygon.setColor(activeColor);
-                        render();
-                    }
-                    case KeyEvent.VK_2 -> {
-                        activeColor = Color.GREEN.getRGB();
-                        polygon.setColor(activeColor);
-                        render();
-                    }
-                    case KeyEvent.VK_3 -> {
-                        activeColor = Color.CYAN.getRGB();
-                        polygon.setColor(activeColor);
-                        render();
-                    }
-                    case KeyEvent.VK_4 -> {
-                        activeColor = Color.YELLOW.getRGB();
-                        polygon.setColor(activeColor);
-                        render();
-                    }
-                    case KeyEvent.VK_5 -> {
-                        activeColor = Color.MAGENTA.getRGB();
-                        polygon.setColor(activeColor);
-                        render();
-                    }
+                    case KeyEvent.VK_1 -> setBoundaryColor(Color.WHITE.getRGB());
+                    case KeyEvent.VK_2 -> setBoundaryColor(Color.GREEN.getRGB());
+                    case KeyEvent.VK_3 -> setBoundaryColor(Color.CYAN.getRGB());
+                    case KeyEvent.VK_4 -> setBoundaryColor(Color.YELLOW.getRGB());
+                    case KeyEvent.VK_5 -> setBoundaryColor(Color.MAGENTA.getRGB());
                 }
             }
 
@@ -227,20 +265,53 @@ public class Controller {
         });
     }
 
+    private void setBoundaryColor(int color) {
+        activeColor = color;
+        polygon.setColor(activeColor);
+        if (fillColor == activeColor) {
+            cycleFillColor();
+        }
+        render();
+    }
+
+    private void cycleFillColor() {
+        do {
+            fillPaletteIndex = (fillPaletteIndex + 1) % FILL_PALETTE.length;
+            fillColor = FILL_PALETTE[fillPaletteIndex];
+        } while (fillColor == activeColor);
+    }
+
     public void render() {
         canvas.clear();
 
+        // 1. Vykreslení rastrových hranic (úsečky, volná ruka, obrys polygonu)
         for (Line line : independentLines) {
             rasterizer.rasterize(line);
+        }
+        for (Line line : freehandLines) {
+            rasterizer.rasterize(line);
+        }
+        polygonRasterizer.rasterize(polygon);
+
+        // 2. Semínkové vyplnění rastrově zadané oblasti
+        if (seedPoint != null) {
+            seedFiller.setSeed(seedPoint);
+            seedFiller.setFillColor(fillColor);
+            seedFiller.setBoundaryColor(activeColor);
+            seedFiller.setUseBoundaryColor(useBoundaryColor);
+            seedFiller.fill();
+        }
+
+        // 3. Značky vrcholů (vykresleny až po SeedFillu, aby nenarušily detekci hranice)
+        for (Line line : independentLines) {
             drawVertexMarker(line.getPoint1());
             drawVertexMarker(line.getPoint2());
         }
-
-        polygonRasterizer.rasterize(polygon);
         for (Point p : polygon.getPoints()) {
             drawVertexMarker(p);
         }
 
+        // 4. Náhledy kreslených čar
         if (previewLine != null) {
             rasterizer.rasterize(previewLine);
         }
@@ -248,11 +319,17 @@ public class Controller {
             rasterizer.rasterize(closingPreviewLine);
         }
 
-        String polyState = polygon.isFinished() ? "UZAVŘENÝ" : "OTEVŘENÝ (" + polygon.size() + " vrcholů)";
+        String modeLabel = switch (currentMode) {
+            case POLYGON -> "POLYGON [P]";
+            case LINE -> "ÚSEČKY [L]";
+            case SEED_FILL -> "SEED FILL [S]";
+        };
+        String seedCondLabel = useBoundaryColor ? "BARVA HRANICE [B]" : "BARVA POZADÍ [B]";
+
         canvas.setStatusText(
-                "Režim: " + (currentMode == Mode.POLYGON ? "POLYGON [P]" : "SAMOSTATNÉ ÚSEČKY [L]") +
-                        " | Stav polygonu: " + polyState + " | Uzavřít polygon: [Enter / F] | Smazat vše: [C]\n" +
-                        "Ovládání: [Levé tl.] Kreslit (+[Shift] zarovnat) | [Pravé tl.] Přesunout | [Střední tl.] Přidat | [D] Smazat | [E/R] Rotace | [1-5] Barva"
+                "Režim: " + modeLabel + " | SeedFill podmínka: " + seedCondLabel +
+                        " | Změna barvy výplně: [V] | Smazat vše: [C]\n" +
+                        "SeedFill [S]: [Klik] Vyplnit | [Tažení] Kreslit hranici || Kreslení [P/L]: [Levé tl.] (+[Shift]) | [Pravé] Přesun | [Střední] Přidat | [1-5] Barva hranice"
         );
 
         canvas.repaint();
