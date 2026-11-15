@@ -6,6 +6,7 @@ import java.awt.*;
 public class Window extends JFrame {
 
     private final Canvas canvas;
+    private final JPanel toolbarPanel;
 
     /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- Constructors -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= */
 
@@ -15,8 +16,12 @@ public class Window extends JFrame {
         setLayout(new BorderLayout());
         setResizable(false);
 
+        toolbarPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        toolbarPanel.setBackground(new Color(0x222222));
+        add(toolbarPanel, BorderLayout.NORTH);
+
         canvas = new Canvas(width, height);
-        add(canvas);
+        add(canvas, BorderLayout.CENTER);
         pack();
 
         setLocationRelativeTo(null);
@@ -29,5 +34,9 @@ public class Window extends JFrame {
 
     public Canvas getCanvas() {
         return canvas;
+    }
+
+    public JPanel getToolbarPanel() {
+        return toolbarPanel;
     }
 }

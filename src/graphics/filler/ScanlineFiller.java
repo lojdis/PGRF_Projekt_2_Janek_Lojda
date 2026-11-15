@@ -43,6 +43,7 @@ public class ScanlineFiller implements PolygonFiller {
     private final PolygonRasterizer polygonRasterizer;
     private Polygon polygon;
     private int fillColor;
+    private PatternFill patternFill;
 
     public ScanlineFiller(Raster<Integer> raster, PolygonRasterizer polygonRasterizer) {
         this.raster = raster;
@@ -55,6 +56,10 @@ public class ScanlineFiller implements PolygonFiller {
 
     public void setFillColor(int fillColor) {
         this.fillColor = fillColor;
+    }
+
+    public void setPatternFill(PatternFill patternFill) {
+        this.patternFill = patternFill;
     }
 
     @Override
@@ -100,7 +105,8 @@ public class ScanlineFiller implements PolygonFiller {
                 int xEnd = (int) Math.round(intersections.get(i + 1));
 
                 for (int x = xStart; x <= xEnd; x++) {
-                    raster.setPixel(x, y, fillColor);
+                    int color = patternFill != null ? patternFill.paint(x, y) : fillColor;
+                    raster.setPixel(x, y, color);
                 }
             }
         }

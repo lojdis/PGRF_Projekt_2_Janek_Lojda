@@ -2,8 +2,7 @@ package controller;
 
 import graphics.clipper.CohenSutherlandClipper;
 import graphics.clipper.SutherlandHodgmanClipper;
-import graphics.filler.ScanlineFiller;
-import graphics.filler.SeedFiller;
+import graphics.filler.*;
 import graphics.rasterizer.LineRasterizer;
 import graphics.rasterizer.PolygonOutlineRasterizer;
 import graphics.rasterizer.PolygonRasterizer;
@@ -12,6 +11,7 @@ import model.Line;
 import model.Point;
 import model.Polygon;
 import view.Canvas;
+import view.Window;
 
 import javax.swing.*;
 import java.awt.*;
@@ -26,7 +26,25 @@ public class Controller {
         POLYGON, LINE, SEED_FILL
     }
 
+    private enum FillPatternMode {
+        SOLID("Plná barva"),
+        CHECKER("Šachovnice"),
+        STRIPES("Pruhy"),
+        GRID("Mřížka");
+
+        private final String label;
+
+        FillPatternMode(String label) {
+            this.label = label;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+    }
+
     private Mode currentMode = Mode.POLYGON;
+    private FillPatternMode patternMode = FillPatternMode.SOLID;
 
     private Line previewLine;
     private Line closingPreviewLine;
@@ -45,8 +63,16 @@ public class Controller {
     private final List<Line> freehandLines = new ArrayList<>();
     private final List<Line> initialDemoLines = new ArrayList<>();
 
-    private int activeColor = Color.WHITE.getRGB();
-    private int fillColor = new Color(255, 140, 0).getRGB();
+    private static final int[] BOUNDARY_PALETTE = {
+            Color.WHITE.getRGB(),
+            Color.GREEN.getRGB(),
+            Color.CYAN.getRGB(),
+            Color.YELLOW.getRGB(),
+            Color.MAGENTA.getRGB()
+    };
+    private int boundaryPaletteIndex = 0;
+    private int activeColor = BOUNDARY_PALETTE[0];
+
     private static final int[] FILL_PALETTE = {
             new Color(255, 140, 0).getRGB(),
             new Color(0, 200, 120).getRGB(),
@@ -55,6 +81,7 @@ public class Controller {
             new Color(255, 215, 0).getRGB()
     };
     private int fillPaletteIndex = 0;
+    private int fillColor = FILL_PALETTE[0];
 
     private Point seedPoint = null;
     private boolean useBoundaryColor = false;
@@ -63,6 +90,10 @@ public class Controller {
     private boolean polygonClippingEnabled = false;
     private Point lastFreehandPoint = null;
     private boolean freehandDragged = false;
+
+    private JButton boundaryColorBtn;
+    private JButton fillColorBtn;
+    private JButton patternBtn;
 
     private static final int PREVIEW_COLOR = Color.RED.getRGB();
     private static final int CLOSING_PREVIEW_COLOR = new Color(255, 165, 0).getRGB();
@@ -104,21 +135,11 @@ public class Controller {
         resetClipPolygon();
     }
 
-    private void resetClipPolygon() {
-        clipPolygon.clear();
-        // Konvexní ořezávací pětiúhelník (5 vrcholů)
-        clipPolygon.addPoint(new Point(350, 120));
-        clipPolygon.addPoint(new Point(540, 220));
-        clipPolygon.addPoint(new Point(480, 430));
-        clipPolygon.addPoint(new Point(220, 430));
-        clipPolygon.addPoint(new Point(160, 220));
-        clipPolygon.setColor(CLIP_WINDOW_COLOR);
-        clipPolygon.setFinished(true);
-    }
-
     /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= Main functions -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- */
 
     public void init() {
+        setupToolbar();
+
         for (Line l : initialDemoLines) {
             polygon.addLine(l);
         }
@@ -288,74 +309,18 @@ public class Controller {
                             updatePreview(lastMousePos);
                         }
                     }
-                    case KeyEvent.VK_C -> {
-                        polygon.clear();
-                        independentLines.clear();
-                        freehandLines.clear();
-                        seedPoint = null;
-                        scanlineEnabled = false;
-                        lineClippingEnabled = false;
-                        polygonClippingEnabled = false;
-                        lineClipper.setBounds(180, 110, 620, 460);
-                        resetClipPolygon();
-                        previewLine = null;
-                        closingPreviewLine = null;
-                        draggedPolygonVertexIndex = -1;
-                        draggedClipPolyVertexIndex = -1;
-                        draggedLine = null;
-                        draggedClipCornerIndex = -1;
-                        render();
-                    }
+                    case KeyEvent.VK_C -> resetAll();
                     case KeyEvent.VK_ENTER, KeyEvent.VK_F -> finishPolygon();
-                    case KeyEvent.VK_G -> {
-                        if (!scanlineEnabled && polygon.size() >= 3) {
-                            polygon.setFinished(true);
-                            previewLine = null;
-                            closingPreviewLine = null;
-                        }
-                        scanlineEnabled = !scanlineEnabled;
-                        render();
-                    }
-                    case KeyEvent.VK_K -> {
-                        lineClippingEnabled = !lineClippingEnabled;
-                        if (lineClippingEnabled && independentLines.isEmpty()) {
-                            independentLines.add(new Line(activeColor, new Point(100, 160), new Point(700, 410)));
-                            independentLines.add(new Line(activeColor, new Point(240, 200), new Point(520, 360)));
-                            independentLines.add(new Line(activeColor, new Point(80, 480), new Point(720, 520)));
-                        }
-                        render();
-                    }
-                    case KeyEvent.VK_H -> {
-                        polygonClippingEnabled = !polygonClippingEnabled;
-                        if (polygonClippingEnabled && polygon.size() >= 3) {
-                            polygon.setFinished(true);
-                            previewLine = null;
-                            closingPreviewLine = null;
-                        }
-                        render();
-                    }
+                    case KeyEvent.VK_G -> toggleScanline();
+                    case KeyEvent.VK_K -> toggleLineClipping();
+                    case KeyEvent.VK_H -> togglePolygonClipping();
                     case KeyEvent.VK_O -> {
                         Collections.reverse(clipPolygon.getPoints());
                         render();
                     }
-                    case KeyEvent.VK_P -> {
-                        currentMode = Mode.POLYGON;
-                        previewLine = null;
-                        closingPreviewLine = null;
-                        render();
-                    }
-                    case KeyEvent.VK_L -> {
-                        currentMode = Mode.LINE;
-                        previewLine = null;
-                        closingPreviewLine = null;
-                        render();
-                    }
-                    case KeyEvent.VK_S -> {
-                        currentMode = Mode.SEED_FILL;
-                        previewLine = null;
-                        closingPreviewLine = null;
-                        render();
-                    }
+                    case KeyEvent.VK_P -> switchMode(Mode.POLYGON);
+                    case KeyEvent.VK_L -> switchMode(Mode.LINE);
+                    case KeyEvent.VK_S -> switchMode(Mode.SEED_FILL);
                     case KeyEvent.VK_B -> {
                         useBoundaryColor = !useBoundaryColor;
                         render();
@@ -364,14 +329,18 @@ public class Controller {
                         cycleFillColor();
                         render();
                     }
+                    case KeyEvent.VK_M -> {
+                        cyclePatternMode();
+                        render();
+                    }
                     case KeyEvent.VK_D, KeyEvent.VK_DELETE, KeyEvent.VK_BACK_SPACE -> deleteClosestVertex(lastMousePos);
                     case KeyEvent.VK_E -> rotatePolygon(-15);
                     case KeyEvent.VK_R -> rotatePolygon(15);
-                    case KeyEvent.VK_1 -> setBoundaryColor(Color.WHITE.getRGB());
-                    case KeyEvent.VK_2 -> setBoundaryColor(Color.GREEN.getRGB());
-                    case KeyEvent.VK_3 -> setBoundaryColor(Color.CYAN.getRGB());
-                    case KeyEvent.VK_4 -> setBoundaryColor(Color.YELLOW.getRGB());
-                    case KeyEvent.VK_5 -> setBoundaryColor(Color.MAGENTA.getRGB());
+                    case KeyEvent.VK_1 -> setBoundaryColor(BOUNDARY_PALETTE[0]);
+                    case KeyEvent.VK_2 -> setBoundaryColor(BOUNDARY_PALETTE[1]);
+                    case KeyEvent.VK_3 -> setBoundaryColor(BOUNDARY_PALETTE[2]);
+                    case KeyEvent.VK_4 -> setBoundaryColor(BOUNDARY_PALETTE[3]);
+                    case KeyEvent.VK_5 -> setBoundaryColor(BOUNDARY_PALETTE[4]);
                 }
             }
 
@@ -383,6 +352,137 @@ public class Controller {
                 }
             }
         });
+    }
+
+    private void setupToolbar() {
+        java.awt.Window ancestor = SwingUtilities.getWindowAncestor(canvas);
+        if (!(ancestor instanceof Window appWindow)) {
+            return;
+        }
+        JPanel toolbar = appWindow.getToolbarPanel();
+
+        toolbar.add(createToolbarButton("Polygon [P]", () -> switchMode(Mode.POLYGON)));
+        toolbar.add(createToolbarButton("Úsečka [L]", () -> switchMode(Mode.LINE)));
+        toolbar.add(createToolbarButton("Seed-Fill [S]", () -> switchMode(Mode.SEED_FILL)));
+        toolbar.add(createToolbarButton("Scan-Line [G]", this::toggleScanline));
+
+        boundaryColorBtn = createToolbarButton("Okraj", () -> {
+            boundaryPaletteIndex = (boundaryPaletteIndex + 1) % BOUNDARY_PALETTE.length;
+            setBoundaryColor(BOUNDARY_PALETTE[boundaryPaletteIndex]);
+        });
+        toolbar.add(boundaryColorBtn);
+
+        fillColorBtn = createToolbarButton("Výplň [V]", () -> {
+            cycleFillColor();
+            render();
+        });
+        toolbar.add(fillColorBtn);
+
+        patternBtn = createToolbarButton("Vzor [M]: Plná barva", () -> {
+            cyclePatternMode();
+            render();
+        });
+        toolbar.add(patternBtn);
+
+        toolbar.add(createToolbarButton("Ořez úsečky [K]", this::toggleLineClipping));
+        toolbar.add(createToolbarButton("Ořez poly [H]", this::togglePolygonClipping));
+        toolbar.add(createToolbarButton("Smazat [C]", this::resetAll));
+
+        updateToolbarIndicators();
+        appWindow.pack();
+    }
+
+    private JButton createToolbarButton(String text, Runnable action) {
+        JButton button = new JButton(text);
+        button.setFocusable(false);
+        button.setMargin(new Insets(3, 7, 3, 7));
+        button.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        button.addActionListener(e -> {
+            action.run();
+            canvas.requestFocusInWindow();
+        });
+        return button;
+    }
+
+    private void updateToolbarIndicators() {
+        if (boundaryColorBtn != null) {
+            boundaryColorBtn.setBackground(new Color(activeColor));
+            boundaryColorBtn.setForeground(Color.BLACK);
+        }
+        if (fillColorBtn != null) {
+            fillColorBtn.setBackground(new Color(fillColor));
+            fillColorBtn.setForeground(Color.BLACK);
+        }
+        if (patternBtn != null) {
+            patternBtn.setText("Vzor [M]: " + patternMode.getLabel());
+        }
+    }
+
+    private void switchMode(Mode mode) {
+        currentMode = mode;
+        previewLine = null;
+        closingPreviewLine = null;
+        render();
+    }
+
+    private void toggleScanline() {
+        if (!scanlineEnabled && polygon.size() >= 3) {
+            polygon.setFinished(true);
+            previewLine = null;
+            closingPreviewLine = null;
+        }
+        scanlineEnabled = !scanlineEnabled;
+        render();
+    }
+
+    private void toggleLineClipping() {
+        lineClippingEnabled = !lineClippingEnabled;
+        if (lineClippingEnabled && independentLines.isEmpty()) {
+            independentLines.add(new Line(activeColor, new Point(100, 160), new Point(700, 410)));
+            independentLines.add(new Line(activeColor, new Point(240, 200), new Point(520, 360)));
+            independentLines.add(new Line(activeColor, new Point(80, 480), new Point(720, 520)));
+        }
+        render();
+    }
+
+    private void togglePolygonClipping() {
+        polygonClippingEnabled = !polygonClippingEnabled;
+        if (polygonClippingEnabled && polygon.size() >= 3) {
+            polygon.setFinished(true);
+            previewLine = null;
+            closingPreviewLine = null;
+        }
+        render();
+    }
+
+    private void resetAll() {
+        polygon.clear();
+        independentLines.clear();
+        freehandLines.clear();
+        seedPoint = null;
+        scanlineEnabled = false;
+        lineClippingEnabled = false;
+        polygonClippingEnabled = false;
+        lineClipper.setBounds(180, 110, 620, 460);
+        resetClipPolygon();
+        previewLine = null;
+        closingPreviewLine = null;
+        draggedPolygonVertexIndex = -1;
+        draggedClipPolyVertexIndex = -1;
+        draggedLine = null;
+        draggedClipCornerIndex = -1;
+        render();
+    }
+
+    private void resetClipPolygon() {
+        clipPolygon.clear();
+        clipPolygon.addPoint(new Point(350, 120));
+        clipPolygon.addPoint(new Point(540, 220));
+        clipPolygon.addPoint(new Point(480, 430));
+        clipPolygon.addPoint(new Point(220, 430));
+        clipPolygon.addPoint(new Point(160, 220));
+        clipPolygon.setColor(CLIP_WINDOW_COLOR);
+        clipPolygon.setFinished(true);
     }
 
     private void setBoundaryColor(int color) {
@@ -401,8 +501,25 @@ public class Controller {
         } while (fillColor == activeColor);
     }
 
+    private void cyclePatternMode() {
+        FillPatternMode[] modes = FillPatternMode.values();
+        patternMode = modes[(patternMode.ordinal() + 1) % modes.length];
+    }
+
+    private PatternFill buildActivePattern() {
+        int secondary = new Color(fillColor).darker().darker().getRGB();
+        return switch (patternMode) {
+            case SOLID -> null;
+            case CHECKER -> new CheckerPattern(fillColor, secondary, 10);
+            case STRIPES -> new StripePattern(fillColor, secondary, 8);
+            case GRID -> new GridPattern(fillColor, secondary, 10);
+        };
+    }
+
     public void render() {
         canvas.clear();
+        updateToolbarIndicators();
+        PatternFill activePattern = buildActivePattern();
 
         for (Line line : freehandLines) {
             rasterizer.rasterize(line);
@@ -416,6 +533,7 @@ public class Controller {
                 if (clippedPoly.size() >= 3) {
                     scanlineFiller.setPolygon(clippedPoly);
                     scanlineFiller.setFillColor(CLIPPED_FILL_COLOR);
+                    scanlineFiller.setPatternFill(activePattern);
                     scanlineFiller.fill();
                     for (Point p : clippedPoly.getPoints()) {
                         drawVertexMarker(p, CLIPPED_LINE_COLOR);
@@ -430,6 +548,7 @@ public class Controller {
         } else if (scanlineEnabled && polygon.isFinished() && polygon.size() >= 3) {
             scanlineFiller.setPolygon(polygon);
             scanlineFiller.setFillColor(fillColor);
+            scanlineFiller.setPatternFill(activePattern);
             scanlineFiller.fill();
         } else {
             polygonRasterizer.rasterize(polygon);
@@ -440,6 +559,7 @@ public class Controller {
             seedFiller.setFillColor(fillColor);
             seedFiller.setBoundaryColor(activeColor);
             seedFiller.setUseBoundaryColor(useBoundaryColor);
+            seedFiller.setPatternFill(activePattern);
             seedFiller.fill();
         }
 
@@ -481,16 +601,13 @@ public class Controller {
             case LINE -> "ÚSEČKY [L]";
             case SEED_FILL -> "SEED FILL [S]";
         };
-        String scanlineLabel = scanlineEnabled ? "ZAP [G]" : "VYP [G]";
-        String clipLineLabel = lineClippingEnabled ? "ZAP [K]" : "VYP [K]";
-        String clipPolyLabel = polygonClippingEnabled ? "ZAP [H]" : "VYP [H]";
+        String seedCondLabel = useBoundaryColor ? "HRANICE [B]" : "POZADÍ [B]";
         String orientLabel = polygonClipper.getSignedArea(clipPolygon.getPoints()) >= 0 ? "+" : "-";
 
         canvas.setStatusText(
-                "Režim: " + modeLabel + " | Scan-Line [G]: " + scanlineLabel +
-                        " | Ořez úsečky [K]: " + clipLineLabel + " | Ořez polygonu [H]: " + clipPolyLabel +
-                        " (orientace [" + orientLabel + "]: [O])\n" +
-                        "Ovládání: [Levé] Kreslit (+[Shift]) | [Pravé] Posun vrcholů/ořezu | [S] Seed-Fill ([B/V]) | [E/R] Rotace | [C] Smazat vše"
+                "Režim: " + modeLabel + " | Vzor [M]: " + patternMode.getLabel() +
+                        " | Seed-Fill podmínka: " + seedCondLabel + " | Orientace ořezu [" + orientLabel + "]: [O]\n" +
+                        "Ovládání: [Levé tl.] Kreslit (+[Shift]) | [Pravé] Přesun vrcholů | [Střední] Přidat vrchol | [D] Smazat vrchol | [E/R] Rotace"
         );
 
         canvas.repaint();
@@ -505,7 +622,7 @@ public class Controller {
             rasterizer.rasterize(new Line(DIMMED_LINE_COLOR, pts.get(i), pts.get(i + 1)));
         }
         if (poly.isFinished() && pts.size() >= 3) {
-            rasterizer.rasterize(new Line(DIMMED_LINE_COLOR, pts.get(pts.size() - 1), pts.get(0)));
+            rasterizer.rasterize(new Line(DIMMED_LINE_COLOR, pts.getLast(), pts.getFirst()));
         }
     }
 

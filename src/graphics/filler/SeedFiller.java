@@ -13,6 +13,7 @@ public class SeedFiller implements PolygonFiller {
     private int fillColor;
     private int boundaryColor;
     private boolean useBoundaryColor;
+    private PatternFill patternFill;
 
     public SeedFiller(Raster<Integer> raster) {
         this.raster = raster;
@@ -34,32 +35,39 @@ public class SeedFiller implements PolygonFiller {
         this.useBoundaryColor = useBoundaryColor;
     }
 
+    public void setPatternFill(PatternFill patternFill) {
+        this.patternFill = patternFill;
+    }
+
     @Override
     public void fill() {
         if (seed == null) {
             return;
         }
 
+        int width = raster.getWidth();
+        int height = raster.getHeight();
         int startX = seed.getX();
         int startY = seed.getY();
-        Integer startColor = raster.getPixel(startX, startY);
 
+        Integer startColor = raster.getPixel(startX, startY);
         if (startColor == null) {
             return;
         }
 
         if (useBoundaryColor) {
-            if (startColor == boundaryColor || startColor == fillColor) {
+            if (startColor == boundaryColor) {
                 return;
             }
-        } else {
-            if (startColor == fillColor) {
-                return;
-            }
+        } else if (patternFill == null && startColor == fillColor) {
+            return;
         }
 
+        boolean[][] visited = new boolean[width][height];
         Queue<Point> queue = new ArrayDeque<>();
-        raster.setPixel(startX, startY, fillColor);
+
+        visited[startX][startY] = true;
+        raster.setPixel(startX, startY, resolveColor(startX, startY));
         queue.add(new Point(startX, startY));
 
         int[] dx = {1, -1, 0, 0};
@@ -74,23 +82,29 @@ public class SeedFiller implements PolygonFiller {
                 int nx = cx + dx[i];
                 int ny = cy + dy[i];
 
+                if (nx < 0 || nx >= width || ny < 0 || ny >= height || visited[nx][ny]) {
+                    continue;
+                }
+
                 Integer pixelColor = raster.getPixel(nx, ny);
                 if (pixelColor == null) {
                     continue;
                 }
 
-                if (useBoundaryColor) {
-                    if (pixelColor != boundaryColor && pixelColor != fillColor) {
-                        raster.setPixel(nx, ny, fillColor);
-                        queue.add(new Point(nx, ny));
-                    }
-                } else {
-                    if (pixelColor.equals(startColor)) {
-                        raster.setPixel(nx, ny, fillColor);
-                        queue.add(new Point(nx, ny));
-                    }
+                boolean shouldFill = useBoundaryColor
+                        ? pixelColor != boundaryColor
+                        : pixelColor.equals(startColor);
+
+                if (shouldFill) {
+                    visited[nx][ny] = true;
+                    raster.setPixel(nx, ny, resolveColor(nx, ny));
+                    queue.add(new Point(nx, ny));
                 }
             }
         }
+    }
+
+    private int resolveColor(int x, int y) {
+        return patternFill != null ? patternFill.paint(x, y) : fillColor;
     }
 }
